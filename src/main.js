@@ -2,6 +2,9 @@ import './style.css';
 
 const APOD_ENDPOINT = 'https://api.nasa.gov/planetary/apod';
 const APOD_START_DATE = '1995-06-16';
+const RECENT_LIMIT = 10;
+const CACHE_PREFIX = 'apod-console:apod:';
+const RECENT_KEY = 'apod-console:recent-dates';
 const BOOT_LINES = [
   '> ESTABLISHING DEEP SPACE NETWORK LINK...',
   '> AUTHENTICATING APOD UPLINK...',
@@ -10,22 +13,26 @@ const BOOT_LINES = [
 ];
 const apiKey = import.meta.env.VITE_NASA_API_KEY || 'DEMO_KEY';
 const app = document.querySelector('#app');
+const state = {
+  activeDate: getTodayDate(),
+  requestId: 0,
+};
 let clockTimer;
 
-function renderLoading() {
+function renderLoading(date = state.activeDate) {
   resetAppState();
   stopUtcClock();
 
   app.innerHTML = `
     <section class="panel panel--center state-panel">
       <p class="eyebrow">APOD-CONSOLE // DEEP SPACE IMAGE LINK</p>
-      <h1>Acquiring Today's Signal</h1>
-      <p>Contacting NASA APOD uplink...</p>
+      <h1>Acquiring Signal</h1>
+      <p class="state-copy">Checking local cache and NASA APOD uplink for ${escapeHtml(date)}...</p>
     </section>
   `;
 }
 
-function renderError(message) {
+function renderError(message, date = state.activeDate) {
   resetAppState();
   stopUtcClock();
 
@@ -33,15 +40,15 @@ function renderError(message) {
     <section class="panel panel--center panel--error state-panel">
       <p class="eyebrow">SIGNAL LOST</p>
       <h1>Uplink Failed</h1>
-      <p>${escapeHtml(message)}</p>
+      <p class="state-copy">${escapeHtml(message)}</p>
       <button class="button" type="button" data-retry>Retry Uplink</button>
     </section>
   `;
 
-  app.querySelector('[data-retry]').addEventListener('click', () => loadTodayApod());
+  app.querySelector('[data-retry]').addEventListener('click', () => loadApodForDate(date));
 }
 
-function renderApod(apod, target = app) {
+function renderApod(apod, cacheState = 'LIVE FETCH', target = app) {
   document.title = `APOD Console // ${apod.title}`;
 
   target.innerHTML = `
@@ -69,7 +76,7 @@ function renderApod(apod, target = app) {
 
         <aside class="sidebar" aria-label="Mission telemetry">
           ${renderMissionControls(apod)}
-          ${renderSignalData(apod)}
+          ${renderSignalData(apod, cacheState)}
         </aside>
       </div>
 
@@ -85,6 +92,7 @@ function renderApod(apod, target = app) {
     </article>
   `;
 
+  bindConsoleControls(target);
   startUtcClock();
 }
 
@@ -141,24 +149,24 @@ function renderMissionControls(apod) {
           min="${APOD_START_DATE}"
           max="${getTodayDate()}"
           value="${escapeAttribute(apod.date)}"
-          disabled
+          data-date-input
         />
         <div class="button-row">
-          <button class="button button--secondary" type="button" disabled>Today</button>
-          <button class="button" type="button" disabled>Random Signal</button>
+          <button class="button button--secondary" type="button" data-today>Today</button>
+          <button class="button" type="button" data-random>Random Signal</button>
         </div>
       </div>
       <div class="recent-block">
         <p class="readout-label">Recent Transmissions</p>
         <div class="recent-strip" aria-label="Recent transmissions">
-          <span class="recent-thumb">${escapeHtml(apod.date)}</span>
+          ${renderRecentTransmissions(apod.date)}
         </div>
       </div>
     </section>
   `;
 }
 
-function renderSignalData(apod) {
+function renderSignalData(apod, cacheState) {
   return `
     <section class="panel sidebar-panel">
       <p class="eyebrow">SIGNAL DATA</p>
@@ -177,30 +185,119 @@ function renderSignalData(apod) {
         </div>
         <div>
           <dt>Cache State</dt>
-          <dd>LIVE FETCH</dd>
+          <dd>${escapeHtml(cacheState)}</dd>
         </div>
       </dl>
     </section>
   `;
 }
 
-async function loadTodayApod() {
-  renderLoading();
+function renderRecentTransmissions(activeDate) {
+  const recentDates = getRecentDates();
+
+  if (recentDates.length === 0) {
+    return '<span class="recent-empty">No local signals</span>';
+  }
+
+  return recentDates.map((date) => renderRecentTransmission(date, date === activeDate)).join('');
+}
+
+function renderRecentTransmission(date, isActive) {
+  const apod = readCachedApod(date);
+  const thumbnail = getThumbnailUrl(apod);
+  const label = apod?.title || `APOD transmission ${date}`;
+  const mediaLabel = getMediaType(apod || { media_type: 'signal' });
+
+  return `
+    <button
+      class="recent-thumb${isActive ? ' is-active' : ''}"
+      type="button"
+      data-history-date="${escapeAttribute(date)}"
+      aria-label="Load APOD from ${escapeAttribute(date)}"
+    >
+      ${
+        thumbnail
+          ? `<img src="${escapeAttribute(thumbnail)}" alt="${escapeAttribute(label)}" />`
+          : `<span class="recent-thumb__fallback">${escapeHtml(mediaLabel)}</span>`
+      }
+      <span>${escapeHtml(date)}</span>
+    </button>
+  `;
+}
+
+function bindConsoleControls(root = app) {
+  root.querySelector('[data-date-input]')?.addEventListener('change', (event) => {
+    if (event.target.value) {
+      loadApodForDate(event.target.value);
+    }
+  });
+
+  root.querySelector('[data-today]')?.addEventListener('click', () => {
+    loadApodForDate(getTodayDate());
+  });
+
+  root.querySelector('[data-random]')?.addEventListener('click', () => {
+    loadApodForDate(getRandomDate());
+  });
+
+  root.querySelectorAll('[data-history-date]').forEach((button) => {
+    button.addEventListener('click', () => {
+      loadApodForDate(button.dataset.historyDate);
+    });
+  });
+}
+
+async function loadApodForDate(date) {
+  let requestedDate;
 
   try {
-    const apod = await fetchTodayApod();
-    renderApod(apod);
+    requestedDate = normalizeDate(date);
   } catch (error) {
-    renderError(error.message);
+    renderError(error.message, state.activeDate);
+    return;
+  }
+
+  const requestId = ++state.requestId;
+  state.activeDate = requestedDate;
+
+  const cachedApod = readCachedApod(requestedDate);
+
+  if (cachedApod) {
+    saveRecentDate(requestedDate);
+    renderApod(cachedApod, 'CACHED');
+    return;
+  }
+
+  renderLoading(requestedDate);
+
+  try {
+    const apod = await fetchApod(requestedDate);
+
+    if (requestId !== state.requestId) {
+      return;
+    }
+
+    writeCachedApod(apod.date, apod);
+    saveRecentDate(apod.date);
+    renderApod(apod, 'LIVE FETCH');
+  } catch (error) {
+    if (requestId !== state.requestId) {
+      return;
+    }
+
+    renderError(error.message, requestedDate);
   }
 }
 
 async function bootAndLoadTodayApod() {
   if (prefersReducedMotion()) {
-    await loadTodayApod();
+    await loadApodForDate(getTodayDate());
     return;
   }
 
+  const today = getTodayDate();
+  const requestId = ++state.requestId;
+  state.activeDate = today;
   stopUtcClock();
   app.classList.add('is-booting');
   app.classList.remove('is-console-ready');
@@ -219,17 +316,23 @@ async function bootAndLoadTodayApod() {
 
   const progress = startBootProgress();
   const bootPromise = runBootSequence(progress);
-  const dataPromise = fetchTodayApod();
+  const dataPromise = getApod(today);
 
   try {
-    const apod = await dataPromise;
+    const { apod, cacheState } = await dataPromise;
     await bootPromise;
     await progress.complete();
-    revealConsoleAfterBoot(apod);
+
+    if (requestId !== state.requestId) {
+      return;
+    }
+
+    saveRecentDate(apod.date);
+    revealConsoleAfterBoot(apod, cacheState);
   } catch (error) {
     await bootPromise;
     await progress.complete();
-    renderError(error.message);
+    renderError(error.message, today);
   }
 }
 
@@ -282,15 +385,15 @@ function startBootProgress() {
   };
 }
 
-function revealConsoleAfterBoot(apod) {
+function revealConsoleAfterBoot(apod, cacheState) {
   const consoleShell = app.querySelector('[data-console-shell]');
 
   if (!consoleShell) {
-    renderApod(apod);
+    renderApod(apod, cacheState);
     return;
   }
 
-  renderApod(apod, consoleShell);
+  renderApod(apod, cacheState, consoleShell);
   consoleShell.hidden = false;
 
   window.requestAnimationFrame(() => {
@@ -303,11 +406,39 @@ function revealConsoleAfterBoot(apod) {
   }, 700);
 }
 
-async function fetchTodayApod() {
+async function getApod(date) {
+  const cachedApod = readCachedApod(date);
+
+  if (cachedApod) {
+    return {
+      apod: cachedApod,
+      cacheState: 'CACHED',
+    };
+  }
+
+  const apod = await fetchApod(date);
+  writeCachedApod(apod.date, apod);
+
+  return {
+    apod,
+    cacheState: 'LIVE FETCH',
+  };
+}
+
+async function fetchApod(date) {
   const url = new URL(APOD_ENDPOINT);
   url.searchParams.set('api_key', apiKey);
+  url.searchParams.set('date', date);
+  url.searchParams.set('thumbs', 'true');
 
-  const response = await fetch(url);
+  let response;
+
+  try {
+    response = await fetch(url);
+  } catch {
+    throw new Error('Network request failed. Check the connection and retry the uplink.');
+  }
+
   const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
@@ -318,7 +449,57 @@ async function fetchTodayApod() {
     throw new Error(message);
   }
 
+  if (!payload?.date || !payload?.title || !payload?.media_type) {
+    throw new Error('NASA APOD returned an incomplete signal packet.');
+  }
+
   return payload;
+}
+
+function readCachedApod(date) {
+  try {
+    const cached = window.localStorage.getItem(getCacheKey(date));
+    return cached ? JSON.parse(cached) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedApod(date, apod) {
+  try {
+    window.localStorage.setItem(getCacheKey(date), JSON.stringify(apod));
+  } catch {
+    // Browsers can reject localStorage when quota is full or storage is disabled.
+  }
+}
+
+function getCacheKey(date) {
+  return `${CACHE_PREFIX}${date}`;
+}
+
+function getRecentDates() {
+  try {
+    const dates = JSON.parse(window.localStorage.getItem(RECENT_KEY) || '[]');
+
+    if (!Array.isArray(dates)) {
+      return [];
+    }
+
+    return dates.filter(isValidDateInRange).slice(0, RECENT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentDate(date) {
+  const recentDates = getRecentDates();
+  const nextDates = [date, ...recentDates.filter((recentDate) => recentDate !== date)].slice(0, RECENT_LIMIT);
+
+  try {
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(nextDates));
+  } catch {
+    // Recent history is helpful, but the console can still run without it.
+  }
 }
 
 function startUtcClock() {
@@ -353,6 +534,18 @@ function getMediaType(apod) {
   return (apod.media_type || 'unknown').toUpperCase();
 }
 
+function getThumbnailUrl(apod) {
+  if (!apod) {
+    return '';
+  }
+
+  if (apod.media_type === 'image') {
+    return apod.url || apod.hdurl || '';
+  }
+
+  return apod.thumbnail_url || '';
+}
+
 function getSolCount(dateString) {
   const start = getUtcDateValue(APOD_START_DATE);
   const current = getUtcDateValue(dateString);
@@ -362,13 +555,57 @@ function getSolCount(dateString) {
   return elapsedDays.toLocaleString('en-US');
 }
 
+function normalizeDate(dateString) {
+  if (!isValidDateInRange(dateString)) {
+    throw new Error(`Target date must be between ${APOD_START_DATE} and ${getTodayDate()}.`);
+  }
+
+  return dateString;
+}
+
+function isValidDateInRange(dateString) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+    return false;
+  }
+
+  const dateValue = getUtcDateValue(dateString);
+
+  if (Number.isNaN(dateValue)) {
+    return false;
+  }
+
+  if (formatUtcDate(dateValue) !== dateString) {
+    return false;
+  }
+
+  return dateValue >= getUtcDateValue(APOD_START_DATE) && dateValue <= getUtcDateValue(getTodayDate());
+}
+
+function getRandomDate() {
+  const start = getUtcDateValue(APOD_START_DATE);
+  const end = getUtcDateValue(getTodayDate());
+  const dayCount = Math.floor((end - start) / 86400000) + 1;
+  const offset = Math.floor(Math.random() * dayCount);
+
+  return formatUtcDate(start + offset * 86400000);
+}
+
 function getUtcDateValue(dateString) {
   const [year, month, day] = dateString.split('-').map(Number);
   return Date.UTC(year, month - 1, day);
 }
 
 function getTodayDate() {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatUtcDate(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 10);
 }
 
 function prefersReducedMotion() {

@@ -74,7 +74,7 @@ h1,
 
 button,
 input {
-  font: inherit;
+  font-family: var(--font-console);
 }
 
 button:focus-visible,
@@ -263,6 +263,12 @@ a:focus-visible {
 }
 
 .state-panel p:last-child {
+  max-width: 58ch;
+  color: var(--color-muted);
+  line-height: 1.7;
+}
+
+.state-copy {
   max-width: 58ch;
   color: var(--color-muted);
   line-height: 1.7;
@@ -479,14 +485,58 @@ p {
 }
 
 .recent-thumb {
+  display: grid;
+  grid-template-rows: 56px auto;
+  gap: 8px;
   flex: 0 0 auto;
+  width: 112px;
   border: 1px solid rgba(255, 176, 0, 0.36);
-  padding: 10px 12px;
+  border-radius: 0;
+  padding: 8px;
   color: var(--color-amber);
   background: rgba(255, 176, 0, 0.06);
   font-family: var(--font-console);
   font-size: 0.68rem;
   letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.recent-thumb:hover,
+.recent-thumb.is-active {
+  border-color: var(--color-amber);
+  background: rgba(255, 176, 0, 0.12);
+}
+
+.recent-thumb img,
+.recent-thumb__fallback {
+  display: block;
+  width: 100%;
+  height: 56px;
+  border: 1px solid var(--color-grid);
+  background: rgba(10, 13, 18, 0.76);
+}
+
+.recent-thumb img {
+  object-fit: cover;
+}
+
+.recent-thumb__fallback {
+  display: grid;
+  place-items: center;
+  color: var(--color-cyan);
+  font-size: 0.6rem;
+}
+
+.recent-empty {
+  border: 1px dashed var(--color-grid);
+  padding: 12px;
+  color: var(--color-faint);
+  font-family: var(--font-console);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .stats-readout {
