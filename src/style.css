@@ -38,12 +38,30 @@ body {
   background-size: 56px 56px, 56px 56px, auto;
 }
 
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(215, 228, 232, 0.055) 0,
+    rgba(215, 228, 232, 0.055) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  opacity: 0.18;
+  mix-blend-mode: screen;
+}
+
 button,
 input,
 h1,
 .eyebrow,
 .mission-id,
 .utc-clock,
+.boot-log,
 .control-label,
 .readout-label,
 .stats-readout,
@@ -75,6 +93,100 @@ a:focus-visible {
 .console {
   display: grid;
   gap: 16px;
+}
+
+.console-shell {
+  opacity: 1;
+}
+
+.is-booting .console-shell {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 520ms ease,
+    transform 520ms ease;
+}
+
+.is-console-ready .console-shell {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(var(--color-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-grid) 1px, transparent 1px),
+    rgba(10, 13, 18, 0.98);
+  background-size: 56px 56px, 56px 56px, auto;
+  opacity: 1;
+  transition: opacity 520ms ease;
+}
+
+.is-console-ready .boot-overlay {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.boot-panel {
+  width: min(760px, 100%);
+  border: var(--panel-border);
+  padding: 24px;
+  background:
+    linear-gradient(180deg, rgba(92, 200, 255, 0.06), transparent 46%),
+    var(--color-panel);
+  box-shadow: var(--panel-shadow);
+}
+
+.boot-log {
+  min-height: 168px;
+  margin: 0;
+  color: var(--color-phosphor);
+  font-size: clamp(0.78rem, 1.8vw, 1rem);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.boot-log::after {
+  content: '';
+  display: inline-block;
+  width: 0.72em;
+  height: 1em;
+  margin-left: 4px;
+  vertical-align: -0.12em;
+  background: var(--color-amber);
+  animation: cursor-blink 780ms steps(2, end) infinite;
+}
+
+.boot-progress {
+  height: 10px;
+  margin-top: 24px;
+  border: 1px solid rgba(92, 200, 255, 0.36);
+  background: rgba(10, 13, 18, 0.82);
+  overflow: hidden;
+}
+
+.boot-progress__bar {
+  position: relative;
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-amber), var(--color-cyan));
+  box-shadow: 0 0 18px rgba(255, 176, 0, 0.42);
+  transition: width 90ms linear;
+}
+
+.boot-progress__bar.is-waiting::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(215, 228, 232, 0.4), transparent);
+  animation: progress-sweep 960ms linear infinite;
 }
 
 .site-header {
@@ -441,6 +553,22 @@ p {
 @keyframes status-pulse {
   50% {
     opacity: 0.35;
+  }
+}
+
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
   }
 }
 

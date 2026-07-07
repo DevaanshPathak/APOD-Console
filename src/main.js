@@ -2,11 +2,18 @@ import './style.css';
 
 const APOD_ENDPOINT = 'https://api.nasa.gov/planetary/apod';
 const APOD_START_DATE = '1995-06-16';
+const BOOT_LINES = [
+  '> ESTABLISHING DEEP SPACE NETWORK LINK...',
+  '> AUTHENTICATING APOD UPLINK...',
+  '> DECODING IMAGE PACKET...',
+  '> LINK ESTABLISHED.',
+];
 const apiKey = import.meta.env.VITE_NASA_API_KEY || 'DEMO_KEY';
 const app = document.querySelector('#app');
 let clockTimer;
 
 function renderLoading() {
+  resetAppState();
   stopUtcClock();
 
   app.innerHTML = `
@@ -19,6 +26,7 @@ function renderLoading() {
 }
 
 function renderError(message) {
+  resetAppState();
   stopUtcClock();
 
   app.innerHTML = `
@@ -30,13 +38,13 @@ function renderError(message) {
     </section>
   `;
 
-  app.querySelector('[data-retry]').addEventListener('click', loadTodayApod);
+  app.querySelector('[data-retry]').addEventListener('click', () => loadTodayApod());
 }
 
-function renderApod(apod) {
+function renderApod(apod, target = app) {
   document.title = `APOD Console // ${apod.title}`;
 
-  app.innerHTML = `
+  target.innerHTML = `
     <article class="console">
       <header class="site-header">
         <div class="mission-id">
@@ -187,6 +195,114 @@ async function loadTodayApod() {
   }
 }
 
+async function bootAndLoadTodayApod() {
+  if (prefersReducedMotion()) {
+    await loadTodayApod();
+    return;
+  }
+
+  stopUtcClock();
+  app.classList.add('is-booting');
+  app.classList.remove('is-console-ready');
+  app.innerHTML = `
+    <section class="boot-overlay" aria-label="APOD Console boot sequence">
+      <div class="boot-panel">
+        <p class="eyebrow">APOD-CONSOLE // BOOT SEQUENCE</p>
+        <pre class="boot-log" aria-live="polite" data-boot-log></pre>
+        <div class="boot-progress" aria-label="Boot progress">
+          <span class="boot-progress__bar" data-boot-progress></span>
+        </div>
+      </div>
+    </section>
+    <div class="console-shell" data-console-shell hidden></div>
+  `;
+
+  const progress = startBootProgress();
+  const bootPromise = runBootSequence(progress);
+  const dataPromise = fetchTodayApod();
+
+  try {
+    const apod = await dataPromise;
+    await bootPromise;
+    await progress.complete();
+    revealConsoleAfterBoot(apod);
+  } catch (error) {
+    await bootPromise;
+    await progress.complete();
+    renderError(error.message);
+  }
+}
+
+async function runBootSequence(progress) {
+  const bootLog = app.querySelector('[data-boot-log]');
+
+  for (const line of BOOT_LINES) {
+    await typeBootLine(bootLog, line);
+    await delay(160);
+  }
+
+  progress.hold();
+}
+
+async function typeBootLine(bootLog, line) {
+  for (const character of line) {
+    bootLog.textContent += character;
+    await delay(18);
+  }
+
+  bootLog.textContent += '\n';
+}
+
+function startBootProgress() {
+  const progressBar = app.querySelector('[data-boot-progress]');
+  let progress = 0;
+  let isHolding = false;
+
+  const progressTimer = window.setInterval(() => {
+    if (isHolding) {
+      progress = Math.min(95, progress + 0.35);
+      progressBar.classList.add('is-waiting');
+    } else {
+      progress = Math.min(86, progress + 1.5);
+    }
+
+    progressBar.style.width = `${progress}%`;
+  }, 70);
+
+  return {
+    hold() {
+      isHolding = true;
+    },
+    complete() {
+      window.clearInterval(progressTimer);
+      progressBar.classList.remove('is-waiting');
+      progressBar.style.width = '100%';
+      return delay(260);
+    },
+  };
+}
+
+function revealConsoleAfterBoot(apod) {
+  const consoleShell = app.querySelector('[data-console-shell]');
+
+  if (!consoleShell) {
+    renderApod(apod);
+    return;
+  }
+
+  renderApod(apod, consoleShell);
+  consoleShell.hidden = false;
+
+  window.requestAnimationFrame(() => {
+    app.classList.add('is-console-ready');
+  });
+
+  window.setTimeout(() => {
+    app.querySelector('.boot-overlay')?.remove();
+    app.classList.remove('is-booting');
+  }, 700);
+}
+
 async function fetchTodayApod() {
   const url = new URL(APOD_ENDPOINT);
   url.searchParams.set('api_key', apiKey);
@@ -255,6 +371,20 @@ function getTodayDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function resetAppState() {
+  app.classList.remove('is-booting', 'is-console-ready');
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function escapeHtml(value = '') {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -268,4 +398,4 @@ function escapeAttribute(value = '') {
   return escapeHtml(value);
 }
 
-loadTodayApod();
+bootAndLoadTodayApod();
